@@ -145,13 +145,6 @@ export async function researchPartsAndManuals({
     reasoning: {
       effort: "low",
     },
-    tools: [
-      {
-        type: "web_search",
-        search_context_size: "medium",
-      },
-    ],
-    tool_choice: "required",
     include: ["web_search_call.action.sources"],
     input: [
       {
