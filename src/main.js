@@ -152,6 +152,12 @@ export default async ({ req, res, log, error }) => {
 
     const body = getRequestBody(req);
 
+    const startedAt = Date.now();
+
+    const logTiming = (stage) => {
+      log(`[Repair timing] ${stage}: ${Date.now() - startedAt}ms`);
+    };
+
     const itemId = cleanString(body.itemId, 36);
     const issueDescription = cleanString(
       body.issueDescription,
@@ -178,11 +184,15 @@ export default async ({ req, res, log, error }) => {
     );
 
     const item = await getOwnedItem(req, userId, itemId);
+    logTiming("Loaded item");
+
 
     const imageInputs = await getRepairPhotoInputs(
       req,
       repairPhotoFileIds
     );
+    logTiming("Loaded repair photos");
+
 
     const diagnosis = await analyzeRepairNeed({
       item,
@@ -190,23 +200,9 @@ export default async ({ req, res, log, error }) => {
       symptoms,
       imageInputs,
     });
+    logTiming("AI diagnosis complete");
 
-    let partsResearch;
-
-    try {
-      partsResearch = await researchPartsAndManuals({
-        item,
-        diagnosis,
-      });
-    } catch (researchError) {
-      log(
-        `Parts research fallback: ${
-          researchError?.message || "Unknown research error"
-        }`
-      );
-
-      partsResearch = fallbackPartsResearch(item, diagnosis);
-    }
+    const partsResearch = fallbackPartsResearch(item, diagnosis);
 
     let repairProviders = {
       status: "not_requested",
@@ -231,6 +227,7 @@ export default async ({ req, res, log, error }) => {
         providers: [],
       };
     }
+    logTiming("Google Places complete");
 
     const repairCase = await createRepairCase({
       req,
@@ -241,6 +238,7 @@ export default async ({ req, res, log, error }) => {
       diagnosis,
       partsResearch,
     });
+    logTiming("Repair case created");
 
     return res.json({
       ok: true,
