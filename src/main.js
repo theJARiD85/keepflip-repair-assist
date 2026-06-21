@@ -202,8 +202,23 @@ export default async ({ req, res, log, error }) => {
     });
     logTiming("AI diagnosis complete");
 
-    const partsResearch = fallbackPartsResearch(item, diagnosis);
+    let partsResearch;
 
+    try {
+      partsResearch = await researchPartsAndManuals({
+        item,
+        diagnosis,
+      });
+    } catch (partsError) {
+      log(
+        `Parts research failed: ${
+          partsError?.message || "Unknown parts-research error"
+        }`
+      );
+    
+      partsResearch = fallbackPartsResearch(item, diagnosis);
+    }
+    
     let repairProviders = {
       status: "not_requested",
       providers: [],
@@ -277,3 +292,4 @@ export default async ({ req, res, log, error }) => {
     );
   }
 };
+
