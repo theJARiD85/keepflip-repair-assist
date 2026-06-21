@@ -145,6 +145,11 @@ export async function researchPartsAndManuals({
     reasoning: {
       effort: "low",
     },
+    tools: [
+      {
+        type: "web_search",
+      },
+    ],
     include: ["web_search_call.action.sources"],
     input: [
       {
