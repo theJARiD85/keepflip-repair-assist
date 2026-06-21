@@ -1,15 +1,9 @@
 import {
   createHttpError,
-  createRepairCase,
   getHeader,
   getOwnedItem,
-  getRepairPhotoInputs,
 } from "./appwrite.js";
-import { findRepairProviders } from "./places.js";
-import {
-  analyzeRepairNeed,
-  researchPartsAndManuals,
-} from "./repairAi.js";
+import { researchPartsAndManuals } from "./repairAi.js";
 
 function getRequestBody(req) {
   if (req.bodyJson && typeof req.bodyJson === "object") {
@@ -35,86 +29,39 @@ function cleanString(value, maxLength = 50000) {
   return value.trim().slice(0, maxLength);
 }
 
-function normalizeSymptoms(value) {
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .slice(0, 12);
-  }
-
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim().slice(0, 500)];
-  }
-
-  return [];
-}
-
-function normalizePhotoIds(value) {
+function stringList(value, maxItems = 12) {
   if (!Array.isArray(value)) {
     return [];
   }
 
-  return [...new Set(
-    value
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-  )].slice(0, 3);
-}
-
-function parseLocation(body) {
-  const latitude = Number(
-    body.latitude ?? body.location?.latitude
-  );
-
-  const longitude = Number(
-    body.longitude ?? body.location?.longitude
-  );
-
-  const valid =
-    Number.isFinite(latitude) &&
-    Number.isFinite(longitude) &&
-    latitude >= -90 &&
-    latitude <= 90 &&
-    longitude >= -180 &&
-    longitude <= 180;
-
-  return valid
-    ? { latitude, longitude }
-    : { latitude: null, longitude: null };
-}
-
-function fallbackPartsResearch(item, diagnosis) {
-  const identity = [
-    item.brand,
-    item.model,
-    item.title,
-  ]
+  return value
+    .filter((entry) => typeof entry === "string")
+    .map((entry) => entry.trim())
     .filter(Boolean)
-    .join(" ");
+    .slice(0, maxItems);
+}
+
+function normalizeDiagnosis(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
 
   return {
-    researchSummary:
-      "Live parts research was unavailable. KeepFlip generated safe search terms from the identified item and reported issue.",
-    parts: [
-      {
-        name: "Replacement-part research",
-        partNumber: null,
-        matchLevel: "likely_component",
-        confidence: 0,
-        searchQuery:
-          diagnosis.partSearchQuery ||
-          `${identity} replacement part`,
-        caution:
-          "Confirm the model number and fitment before purchasing any replacement part.",
-      },
-    ],
-    warnings: [
-      "No live parts sources were returned during this request.",
-    ],
-    sources: [],
+    issueTitle: cleanString(value.issueTitle, 200),
+    diagnosisSummary: cleanString(value.diagnosisSummary, 2000),
+    likelyCause: cleanString(value.likelyCause, 1500),
+    repairability: cleanString(value.repairability, 80),
+    needsProfessional: Boolean(value.needsProfessional),
+    urgency: cleanString(value.urgency, 80),
+    safetyWarnings: stringList(value.safetyWarnings),
+    safeNextSteps: stringList(value.safeNextSteps),
+    partSearchQuery: cleanString(value.partSearchQuery, 500),
+    manualSearchQuery: cleanString(value.manualSearchQuery, 500),
+    repairShopSearchQuery: cleanString(
+      value.repairShopSearchQuery,
+      500
+    ),
+    followUpQuestions: stringList(value.followUpQuestions),
   };
 }
 
@@ -123,8 +70,8 @@ export default async ({ req, res, log, error }) => {
     if (req.method === "GET") {
       return res.json({
         ok: true,
-        service: "keepflip-repair-assist",
-        message: "KeepFlip Repair Assistant is online.",
+        service: "keepflip-parts-research",
+        message: "KeepFlip Parts Research is online.",
       });
     }
 
@@ -132,7 +79,7 @@ export default async ({ req, res, log, error }) => {
       return res.json(
         {
           ok: false,
-          error: "Use POST for repair research.",
+          error: "Use POST for parts research.",
         },
         405
       );
@@ -144,7 +91,7 @@ export default async ({ req, res, log, error }) => {
       return res.json(
         {
           ok: false,
-          error: "You must be signed in to use repair assistance.",
+          error: "You must be signed in to research parts.",
         },
         401
       );
@@ -152,136 +99,56 @@ export default async ({ req, res, log, error }) => {
 
     const body = getRequestBody(req);
 
-    const startedAt = Date.now();
-
-    const logTiming = (stage) => {
-      log(`[Repair timing] ${stage}: ${Date.now() - startedAt}ms`);
-    };
-
     const itemId = cleanString(body.itemId, 36);
-    const issueDescription = cleanString(
-      body.issueDescription,
-      50000
-    );
-    const symptoms = normalizeSymptoms(body.symptoms);
-    const repairPhotoFileIds = normalizePhotoIds(
-      body.repairPhotoFileIds
-    );
-    const location = parseLocation(body);
+    const diagnosis = normalizeDiagnosis(body.diagnosis);
 
     if (!itemId) {
       throw createHttpError("itemId is required.");
     }
 
-    if (!issueDescription) {
+    if (!diagnosis) {
       throw createHttpError(
-        "Describe what is wrong before researching repair options."
+        "A valid repair diagnosis is required before researching parts."
       );
     }
 
-    log(
-      `Repair research requested by ${userId} for item ${itemId}.`
-    );
+    const startedAt = Date.now();
 
     const item = await getOwnedItem(req, userId, itemId);
-    logTiming("Loaded item");
 
-
-    const imageInputs = await getRepairPhotoInputs(
-      req,
-      repairPhotoFileIds
+    log(
+      `Live parts research requested by ${userId} for item ${itemId}.`
     );
-    logTiming("Loaded repair photos");
 
-
-    const diagnosis = await analyzeRepairNeed({
+    const partsResearch = await researchPartsAndManuals({
       item,
-      issueDescription,
-      symptoms,
-      imageInputs,
-    });
-    logTiming("AI diagnosis complete");
-
-    let partsResearch;
-
-    try {
-      partsResearch = await researchPartsAndManuals({
-        item,
-        diagnosis,
-      });
-    } catch (partsError) {
-      log(
-        `Parts research failed: ${
-          partsError?.message || "Unknown parts-research error"
-        }`
-      );
-    
-      partsResearch = fallbackPartsResearch(item, diagnosis);
-    }
-    
-    let repairProviders = {
-      status: "not_requested",
-      providers: [],
-    };
-
-    try {
-      repairProviders = await findRepairProviders({
-        searchQuery: diagnosis.repairShopSearchQuery,
-        latitude: location.latitude,
-        longitude: location.longitude,
-      });
-    } catch (placesError) {
-      log(
-        `Repair-provider lookup failed: ${
-          placesError?.message || "Unknown Places error"
-        }`
-      );
-
-      repairProviders = {
-        status: "unavailable",
-        providers: [],
-      };
-    }
-    logTiming("Google Places complete");
-
-    const repairCase = await createRepairCase({
-      req,
-      userId,
-      itemId,
-      issueDescription,
-      symptoms,
       diagnosis,
-      partsResearch,
     });
-    logTiming("Repair case created");
+
+    log(
+      `Live parts research finished in ${
+        Date.now() - startedAt
+      }ms for item ${itemId}.`
+    );
 
     return res.json({
       ok: true,
-      repairCase: {
-        id: repairCase.$id,
-        itemId,
-        createdAt: repairCase.createdAt,
-      },
       item: {
         id: item.$id,
         title: item.title,
         brand: item.brand || null,
         model: item.model || null,
-        category: item.category || null,
-        condition: item.condition || null,
       },
-      diagnosis,
       partsResearch,
-      repairProviders,
       researchedAt: new Date().toISOString(),
     });
   } catch (caughtError) {
     const message =
       caughtError instanceof Error
         ? caughtError.message
-        : "Repair research failed.";
+        : "Parts research failed.";
 
-    error(`KeepFlip Repair Assistant: ${message}`);
+    error(`KeepFlip Parts Research: ${message}`);
 
     return res.json(
       {
