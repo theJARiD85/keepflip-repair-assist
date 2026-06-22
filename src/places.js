@@ -48,7 +48,10 @@ export async function findRepairProviders({
 
   const requestBody = {
     textQuery: searchQuery.trim(),
+    fileds: ['displayName', 'formattedAddress', 'location', 'rating', 'userRatingCount', 'nationalPhoneNumber', 'websiteUri', 'googleMapsUri', 'regularOpeningHours', 'businessStatus'],
     maxResultCount: 8,
+    minRating: 1,
+    language: 'en-US',
     locationBias: {
       circle: {
         center: {
@@ -58,6 +61,7 @@ export async function findRepairProviders({
         radius: 25000,
       },
     },
+    region: 'us',
   };
 
   log(
